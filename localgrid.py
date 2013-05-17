@@ -3,6 +3,8 @@
 
 import osgeo.ogr as ogr
 import re
+import time
+import io
 
 from dbconnection import dbconnection
 
@@ -116,15 +118,16 @@ class Grid:
 
         utf = {}
         utf['grid'] = utf_rows
-        utf['keys'] = [str(key) for key in key_order]
+        utf['keys'] = [unicode(key) for key in key_order]
         utf['data'] = data
         return utf
 
 class Renderer:
-    def __init__(self,grid,ctrans):
+    def __init__(self,grid,ctrans,fid_column):
         self.grid = grid
         self.ctrans = ctrans
         self.req = ctrans.request
+        self.fid_column = fid_column
 
     def apply(self,layer,field_names=[]):
         layer_def = layer.GetLayerDefn()
@@ -136,23 +139,33 @@ class Renderer:
         if len(fields.keys()) == 0:
             raise Exception("No valid fields, field_names was %s")
 
+
         layer.ResetReading()
+
         for y in xrange(0,self.req.height,self.grid.resolution):
             row = []
             for x in xrange(0,self.req.width,self.grid.resolution):
                 minx,maxy = self.ctrans.backward(x,y)
-                maxx,miny = self.ctrans.backward(x+1,y+1)
-                wkt = 'POLYGON ((%f %f, %f %f, %f %f, %f %f, %f %f))' \
-                   % (minx, miny, minx, maxy, maxx, maxy, maxx, miny, minx, miny)
-                g = ogr.CreateGeometryFromWkt(wkt)
-                layer.SetSpatialFilter(g)
+                #maxx,miny = self.ctrans.backward(x+1,y+1)
+                maxx,miny = self.ctrans.backward(x+self.grid.resolution, y+self.grid.resolution)
+                #wkt = 'POLYGON ((%f %f, %f %f, %f %f, %f %f, %f %f))' \
+                #   % (minx, miny, minx, maxy, maxx, maxy, maxx, miny, minx, miny)
+                #g = ogr.CreateGeometryFromWkt(wkt)
+                #layer.SetSpatialFilter(g)
+                layer.SetSpatialFilterRect(minx, miny, maxx, maxy)
+                g = layer.GetSpatialFilter()
                 found = False
                 feat = layer.GetNextFeature()
+
+                if feat is None:
+                    print 'no feature found'
+
                 while feat is not None:
                     geom = feat.GetGeometryRef()
+                    # we always take the first feature intersecting with the given utfgrid pixel
                     if geom.Intersects(g):
-                        feature_id = feat.GetFID()
-                        row.append(feature_id)
+                        #feat.GetFID() is not unique between different ResetReadings (because no FID column is specified
+                        #feature_id = feat.GetFID()
                         attr = {}
                         for index, field in fields.iteritems():
                             field_type = field['type'] #.GetTypeName()
@@ -163,12 +176,19 @@ class Renderer:
                                 attr[field_name] = feat.GetFieldAsDouble(index)
                             else:
                                 attr[field_name] = feat.GetFieldAsString(index)
+                            
+                        feature_id = int(attr[self.fid_column])
+                        row.append(feature_id)
                         self.grid.feature_cache[feature_id] = attr
                         found = True
+                        #according to ogr doc, this must be called
+                        feat.Destroy()
                         # Note that setting feat to None 
                         # effectively grabs the first intersecting feature
                         feat = None
                     else:
+                        #according to ogr doc, this must be called
+                        feat.Destroy()
                         feat = layer.GetNextFeature()
                 
                 if not found:
@@ -186,44 +206,47 @@ def resolve(grid,row,col):
     return grid['data'].get(key)
 
 def query():
-    return "the_geom,gemname,flaeche FROM tlm.swissboundaries_gemeinden"
-
-
-def getbbox():
-    #minx, miny, maxx, maxy = 420000,30000,900000,350000
-    minx, miny, maxx, maxy = 622000,125000,632000,135000
-    wkt = "POLYGON((%d %d,%d %d,%d %d,%d %d,%d %d))"%(minx, miny,
-                                                      minx, maxy,
-                                                      maxx, maxy,
-                                                      maxx, miny,
-                                                      minx, miny)
-    return ogr.CreateGeometryFromWkt(wkt)
+    return "the_geom,gemname,flaeche,id FROM tlm.swissboundaries_gemeinden"
 
 def getutfbox():
-#   return Extent(622000,125000,632000,135000)
-    return Extent(628400,128800,628500,128900)
+   return Extent(622000,125000,632000,135000)
+  #  return Extent(628400,128800,628500,128900)
 
+def getbbox():
+    ub = getutfbox()
+    wkt = "POLYGON((%d %d,%d %d,%d %d,%d %d,%d %d))"%(ub.minx, ub.miny,
+                                                      ub.minx, ub.maxy,
+                                                      ub.maxx, ub.maxy,
+                                                      ub.maxx, ub.miny,
+                                                      ub.minx, ub.miny)
+    return ogr.CreateGeometryFromWkt(wkt)
     
 if __name__ == "__main__":
-    ogrBounds = getbbox()
-    ds = ogr.Open("PG:%s"%dbconnection.strip('"'))
+    start = time.time();
+
+    ds = ogr.Open("PG:%s "%dbconnection.strip('"'))
     
     if ds is None:
         raise Exception("PostGIS connection failed: '%s'"%dbconnection)
 
     q = query()
     for sql in re.split('"\W*"', q):
-        layer = ds.ExecuteSQL("SELECT " + sql.strip('" '), ogrBounds)
+        layer = ds.ExecuteSQL("SELECT " + sql.strip('" '), getbbox())
         if layer is not None:
             tile = Request(256, 256, getutfbox())
             ctrans = CoordTransform(tile)
-            grid = Grid()
-            rend = Renderer(grid,ctrans)
-            rend.apply(layer,field_names=['gemname' ,'flaeche'])
+            grid = Grid(resolution=8)
+            rend = Renderer(grid,ctrans,'id')
+            rend.apply(layer,field_names=['gemname' ,'flaeche','id'])
             utfgrid = grid.encode()
-            print json.dumps(utfgrid, indent=4)
+            #print utfgrid
+            with io.open('utfgrid.json', 'w', encoding='utf-8') as f:
+                ustring = unicode(json.dumps(utfgrid, indent=4), 'utf-8')
+                f.write(ustring)
+                f.close()
             
             ds.ReleaseResultSet(layer)
 
     ds.Destroy()
+    print time.time() - start
     
