@@ -142,25 +142,24 @@ class Renderer:
 
         layer.ResetReading()
 
+        #we cache our features to not tap the database for every pixel
+        features = []
+        temp_feat = layer.GetNextFeature()
+        while temp_feat is not None:
+            features.append(temp_feat)
+            temp_feat = layer.GetNextFeature()
+
         for y in xrange(0,self.req.height,self.grid.resolution):
             row = []
             for x in xrange(0,self.req.width,self.grid.resolution):
                 minx,maxy = self.ctrans.backward(x,y)
-                #maxx,miny = self.ctrans.backward(x+1,y+1)
                 maxx,miny = self.ctrans.backward(x+self.grid.resolution, y+self.grid.resolution)
-                #wkt = 'POLYGON ((%f %f, %f %f, %f %f, %f %f, %f %f))' \
-                #   % (minx, miny, minx, maxy, maxx, maxy, maxx, miny, minx, miny)
-                #g = ogr.CreateGeometryFromWkt(wkt)
-                #layer.SetSpatialFilter(g)
-                layer.SetSpatialFilterRect(minx, miny, maxx, maxy)
-                g = layer.GetSpatialFilter()
+                wkt = 'POLYGON ((%f %f, %f %f, %f %f, %f %f, %f %f))' \
+                   % (minx, miny, minx, maxy, maxx, maxy, maxx, miny, minx, miny)
+                g = ogr.CreateGeometryFromWkt(wkt)
                 found = False
-                feat = layer.GetNextFeature()
 
-                if feat is None:
-                    print 'no feature found'
-
-                while feat is not None:
+                for feat in features:
                     geom = feat.GetGeometryRef()
                     # we always take the first feature intersecting with the given utfgrid pixel
                     if geom.Intersects(g):
@@ -181,15 +180,7 @@ class Renderer:
                         row.append(feature_id)
                         self.grid.feature_cache[feature_id] = attr
                         found = True
-                        #according to ogr doc, this must be called
-                        feat.Destroy()
-                        # Note that setting feat to None 
-                        # effectively grabs the first intersecting feature
-                        feat = None
-                    else:
-                        #according to ogr doc, this must be called
-                        feat.Destroy()
-                        feat = layer.GetNextFeature()
+                        break
                 
                 if not found:
                     row.append("")
@@ -235,7 +226,7 @@ if __name__ == "__main__":
         if layer is not None:
             tile = Request(256, 256, getutfbox())
             ctrans = CoordTransform(tile)
-            grid = Grid(resolution=8)
+            grid = Grid(resolution=1)
             rend = Renderer(grid,ctrans,'id')
             rend.apply(layer,field_names=['gemname' ,'flaeche','id'])
             utfgrid = grid.encode()
