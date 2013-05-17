@@ -1,4 +1,6 @@
 *.py[cod]
+dbconnection.py
+utfgrid.json
 
 # C extensions
 *.so
