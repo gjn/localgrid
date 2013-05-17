@@ -12,6 +12,7 @@ Create dbconnection.py file at same level as localgrid.py containing the databas
 connection string (including passwords and database to choose).
 
 For example
+
     dbconnection = 'host=host_url user=dbuser password=dbpassword dbname=database'
 
 Adapt `query()` to query your database (query must include a geometry column)
