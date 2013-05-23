@@ -17,3 +17,8 @@ For example
 
 Adapt `query()` to query your database (query must include a geometry column)
 Adapt `getutfbox` to specify extend of your utfgrid
+
+Sample
+=======
+Sample file: https://github.com/gjn/localgrid/blob/master/utfgrid.json which corresponds
+more or less to http://s.geo.admin.ch/d037d8769
